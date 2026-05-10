@@ -1,14 +1,16 @@
-import { Extension } from "@codemirror/state";
-import { EditorView, Decoration, ViewPlugin, ViewUpdate, WidgetType } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+import { Extension, Prec } from "@codemirror/state";
+import { EditorView, Decoration, MatchDecorator, ViewPlugin, ViewUpdate, WidgetType } from "@codemirror/view";
 import { editorLivePreviewField } from "obsidian";
+
+// Try to import syntaxTree - it might be available through the bundle
+// @ts-ignore - Obsidian bundles this but doesn't export it
+import { syntaxTree } from "@codemirror/language";
 
 class TableCheckboxWidget extends WidgetType {
 	constructor(private readonly checked: boolean) {
 		super();
 	}
 
-	// Important: for efficient widget comparison
 	eq(other: TableCheckboxWidget): boolean {
 		return other.checked === this.checked;
 	}
@@ -32,91 +34,61 @@ class TableCheckboxWidget extends WidgetType {
 		return wrapper;
 	}
 
-	// Prevent CM6 from handling cursor positioning
 	override ignoreEvent(event: Event): boolean {
 		return event.type === "click" || event.type === "mousedown";
 	}
 }
 
-function isInsideTable(view: EditorView, pos: number): boolean {
-	const line = view.state.doc.lineAt(pos);
-	const lineText = view.state.doc.sliceString(line.from, line.to);
-	return lineText.includes("|");
-}
+const checkboxDecorator = new MatchDecorator({
+	regexp: /\[([ x])\]/g,
+	decoration: (match, view, pos) => {
+		// Use syntax tree to check if we're inside a table
+		let isInsideTable = false;
 
-function isInsideCodeBlock(view: EditorView, pos: number): boolean {
-	const line = view.state.doc.lineAt(pos);
-	const lineText = view.state.doc.sliceString(line.from, line.to);
+		try {
+			const tree = syntaxTree(view.state);
+			const node = tree.resolveInner(pos, 1);
 
-	// Skip indented code blocks
-	if (/^[ \t]{4,}/.test(lineText)) {
-		return true;
-	}
-
-	// Check for fenced code blocks by looking backwards
-	const doc = view.state.doc;
-	let currentLine = line;
-	let linesChecked = 0;
-	let insideCodeBlock = false;
-
-	while (currentLine && linesChecked < 100) {
-		const text = doc.sliceString(currentLine.from, currentLine.to).trim();
-
-		if (text.startsWith("```")) {
-			insideCodeBlock = currentLine.from < line.from;
-			break;
-		}
-
-		if (currentLine.from === 0) break;
-
-		currentLine = doc.lineAt(currentLine.from - 1);
-		linesChecked++;
-	}
-
-	return insideCodeBlock;
-}
-
-function buildDecorations(view: EditorView) {
-	const builder = new RangeSetBuilder<Decoration>();
-	const { from, to } = view.viewport;
-	const doc = view.state.doc;
-	const checkboxRegex = /\[([ x])\]/g;
-
-	for (let pos = from; pos <= to; ) {
-		const line = doc.lineAt(pos);
-		const lineContent = doc.sliceString(line.from, line.to);
-
-		// Skip if in code block
-		if (isInsideCodeBlock(view, line.from)) {
-			pos = line.to + 1;
-			continue;
-		}
-
-		// Find checkboxes in this line
-		checkboxRegex.lastIndex = 0;
-		let match: RegExpExecArray | null;
-
-		while ((match = checkboxRegex.exec(lineContent)) !== null) {
-			const matchPos = line.from + match.index;
-			const isChecked = match[1] === "x";
-
-			// Only decorate if inside a table
-			if (matchPos >= from && matchPos <= to && isInsideTable(view, matchPos)) {
-				builder.add(
-					matchPos,
-					matchPos + 3,
-					Decoration.replace({
-						widget: new TableCheckboxWidget(isChecked),
-					})
-				);
+			// Walk up the tree to check if we're in a table
+			let curr: typeof node | null = node;
+			while (curr) {
+				// Check for table-related node names
+				if (
+					curr.name.includes("table") ||
+					curr.name.includes("Table") ||
+					curr.name === "TableHeader" ||
+					curr.name === "TableRow" ||
+					curr.name === "TableCell"
+				) {
+					isInsideTable = true;
+					break;
+				}
+				// Skip if in code block
+				if (
+					curr.name === "FencedCode" ||
+					curr.name === "CodeBlock" ||
+					curr.name === "InlineCode"
+				) {
+					return null;
+				}
+				curr = curr.parent;
 			}
+		} catch (e) {
+			// Fallback to line-based detection if syntaxTree fails
+			const line = view.state.doc.lineAt(pos);
+			const lineText = view.state.doc.sliceString(line.from, line.to);
+			if (!lineText.includes("|")) return null;
 		}
 
-		pos = line.to + 1;
-	}
+		// Only render if inside a table
+		if (!isInsideTable) return null;
 
-	return builder.finish();
-}
+		const isChecked = match[1] === "x";
+		return Decoration.replace({
+			widget: new TableCheckboxWidget(isChecked),
+		});
+	},
+});
 
 const tableCheckboxExtension: Extension = [
 	ViewPlugin.fromClass(
@@ -124,10 +96,9 @@ const tableCheckboxExtension: Extension = [
 			decorations = Decoration.none;
 
 			constructor(view: EditorView) {
-				// Only create decorations in Live Preview mode
 				const livePreview = view.state.field(editorLivePreviewField, false);
 				if (livePreview) {
-					this.decorations = buildDecorations(view);
+					this.decorations = checkboxDecorator.createDeco(view);
 				}
 			}
 
@@ -138,10 +109,7 @@ const tableCheckboxExtension: Extension = [
 					return;
 				}
 
-				// Rebuild decorations on document changes or viewport changes
-				if (update.docChanged || update.viewportChanged) {
-					this.decorations = buildDecorations(update.view);
-				}
+				this.decorations = checkboxDecorator.updateDeco(update, this.decorations);
 			}
 		},
 		{
@@ -185,5 +153,5 @@ const tableCheckboxExtension: Extension = [
 ];
 
 export function registerTableCheckboxExtension(): Extension {
-	return tableCheckboxExtension;
+	return Prec.highest(tableCheckboxExtension);
 }
