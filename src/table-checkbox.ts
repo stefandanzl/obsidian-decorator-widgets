@@ -26,10 +26,17 @@ class TableCheckboxWidget extends WidgetType {
 		// Set checked state based on character (only space means unchecked)
 		checkbox.checked = this.currentChar !== " ";
 
-		checkbox.setCustomValidity("");
+		// Prevent focus and cursor movement
+		checkbox.tabIndex = -1;
+
+		checkbox.onmousedown = (e: MouseEvent) => {
+			e.preventDefault();
+		};
+
 		checkbox.onclick = (e: MouseEvent) => {
 			e.preventDefault();
 			e.stopPropagation();
+			e.stopImmediatePropagation();
 
 			// Toggle between [ ] and [x]
 			const newChar = checkbox.checked ? "x" : " ";
@@ -53,12 +60,15 @@ class TableCheckboxWidget extends WidgetType {
 		while ((match = checkboxRegex.exec(lineContent)) !== null) {
 			const absPos = line.from + match.index;
 			if (absPos === this.pos) {
+				// Don't change selection - let CM6 handle it since replacement is same length
 				this.view.dispatch({
 					changes: {
 						from: absPos,
 						to: absPos + 3,
 						insert: `[${newChar}]`
-					}
+					},
+					userEvent: "input",
+					scrollIntoView: false
 				});
 				break;
 			}
@@ -118,9 +128,6 @@ const tableCheckboxExtension = [
 		// Only scan visible viewport for performance
 		const { from, to } = view.viewport;
 
-		// Debug log to verify the extension is running
-		console.log("[Decorator Widgets] Scanning viewport", { from, to });
-
 		const doc = view.state.doc;
 		const checkboxRegex = /\[[^\]|]\]/g;
 
@@ -142,13 +149,6 @@ const tableCheckboxExtension = [
 				const matchPos = line.from + match.index;
 				const char = match[0][1];
 
-				console.log("[Decorator Widgets] Found checkbox", {
-					char,
-					pos: matchPos,
-					line: lineContent,
-					inTable: isInsideTable(view, matchPos)
-				});
-
 				// Only decorate if inside a table and within viewport
 				if (matchPos >= from && matchPos <= to && isInsideTable(view, matchPos)) {
 					const decoration = Decoration.replace({
@@ -161,9 +161,7 @@ const tableCheckboxExtension = [
 			pos = line.to + 1;
 		}
 
-		const decorations = builder.finish();
-		console.log("[Decorator Widgets] Created decorations", decorations.size);
-		return decorations;
+		return builder.finish();
 	})
 ];
 
