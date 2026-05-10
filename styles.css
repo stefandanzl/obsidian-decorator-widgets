@@ -56,3 +56,7 @@ If your plugin does not need CSS, delete this file.
 .decorator-widgets-has-checkbox .decorator-widgets-checkbox {
 	pointer-events: auto !important;
 }
+
+td:has(.decorator-widgets-checkbox) {
+	pointer-events: none !important;
+}

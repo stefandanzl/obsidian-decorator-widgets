@@ -2,12 +2,102 @@ import { Extension } from "@codemirror/state";
 import { EditorView, Decoration, MatchDecorator, ViewPlugin, ViewUpdate, WidgetType } from "@codemirror/view";
 import { editorLivePreviewField } from "obsidian";
 
+/**
+ * Toggle the table checkbox at the current cursor position.
+ * Only works if the cell contains ONLY [ ] or [x] (with optional whitespace).
+ * Returns true if toggled, false otherwise.
+ */
+export function toggleTableCheckbox(view: EditorView): boolean {
+	const pos = view.state.selection.main.from;
+	const line = view.state.doc.lineAt(pos);
+	const lineText = view.state.doc.sliceString(line.from, line.to);
+
+	// Check if we're in a table
+	if (!lineText.includes("|")) {
+		return false;
+	}
+
+	// Find the table cell at cursor position
+	const cellContent = extractCellContent(lineText, pos - line.from);
+	if (!cellContent) {
+		return false;
+	}
+
+	// Check if cell contains ONLY [ ] or [x] (with optional whitespace)
+	const trimmedContent = cellContent.trim();
+	const isCheckbox = /^\[([ x])\]$/.test(trimmedContent);
+
+	if (!isCheckbox) {
+		// Cell has other content, don't toggle
+		return false;
+	}
+
+	// Toggle the checkbox state
+	const currentState = trimmedContent.match(/\[([ x])\]/)?.[1] || " ";
+	const newState = currentState === " " ? "x" : " ";
+
+	// Find the position of the checkbox character
+	const cellStart = findCellStart(lineText, pos - line.from);
+	const checkboxMatch = lineText.slice(cellStart).match(/\[([ x])\]/);
+
+	if (!checkboxMatch) {
+		return false;
+	}
+
+	// Calculate the absolute position of the checkbox character
+	const checkboxPos = line.from + cellStart + checkboxMatch.index! + 1;
+
+	// Update the document
+	const transaction = view.state.update({
+		changes: {
+			from: checkboxPos,
+			to: checkboxPos + 1,
+			insert: newState,
+		},
+	});
+
+	view.dispatch(transaction);
+	return true;
+}
+
+/**
+ * Extract the content of the table cell at the given position in a line.
+ */
+function extractCellContent(lineText: string, pos: number): string | null {
+	const cellStart = findCellStart(lineText, pos);
+	const cellEnd = findCellEnd(lineText, pos);
+
+	if (cellStart === -1 || cellEnd === -1) {
+		return null;
+	}
+
+	return lineText.slice(cellStart, cellEnd);
+}
+
+/**
+ * Find the start position of the table cell containing the given position.
+ */
+function findCellStart(lineText: string, pos: number): number {
+	const beforePos = lineText.slice(0, pos);
+	const lastPipe = beforePos.lastIndexOf("|");
+	return lastPipe + 1;
+}
+
+/**
+ * Find the end position of the table cell containing the given position.
+ */
+function findCellEnd(lineText: string, pos: number): number {
+	const fromPos = lineText.slice(pos);
+	const nextPipe = fromPos.indexOf("|");
+	return nextPipe === -1 ? -1 : pos + nextPipe;
+}
+
+// ============================================================================
+// VISUAL WIDGETS (read-only, no click handling)
+// ============================================================================
+
 class TableCheckboxWidget extends WidgetType {
-	constructor(
-		private readonly pos: number,
-		private readonly currentChar: string,
-		private readonly view: EditorView,
-	) {
+	constructor(private readonly currentChar: string) {
 		super();
 	}
 
@@ -16,12 +106,6 @@ class TableCheckboxWidget extends WidgetType {
 	}
 
 	toDOM() {
-		console.log(
-			"[Decorator Widgets] Creating checkbox widget at pos",
-			this.pos,
-			"current:",
-			this.currentChar,
-		);
 		const wrapper = document.createElement("span");
 		wrapper.className = "task-list-item decorator-widgets-wrapper";
 
@@ -33,97 +117,16 @@ class TableCheckboxWidget extends WidgetType {
 		checkbox.className = "task-list-item-checkbox decorator-widgets-checkbox";
 		checkbox.checked = this.currentChar !== " ";
 		checkbox.tabIndex = -1;
-		checkbox.disabled = false;
-		checkbox.removeAttribute("disabled");
+		checkbox.disabled = true; // Always disabled - use hotkey instead
 
-		// Click handler - will be re-attached after cloning
-		const clickHandler = (e: Event) => {
-			console.log("[Decorator Widgets] Checkbox clicked!");
-			e.preventDefault();
-			e.stopPropagation();
-
-			const newState = this.currentChar === " " ? "x" : " ";
-			console.log("[Decorator Widgets] Updating:", this.currentChar, "->", newState);
-			const transaction = this.view.state.update({
-				changes: {
-					from: this.pos,
-					to: this.pos + 1,
-					insert: newState,
-				},
-			});
-			this.view.dispatch(transaction);
-		};
-
-		checkbox.addEventListener("click", clickHandler);
 		label.appendChild(checkbox);
 		wrapper.appendChild(label);
-
-		// Schedule fixing all table cells with our checkboxes
-		// This runs after widgets are inserted into the DOM
-		requestAnimationFrame(() => {
-			fixAllTableCells();
-		});
-		setTimeout(() => fixAllTableCells(), 50);
-		setTimeout(() => fixAllTableCells(), 100);
 
 		return wrapper;
 	}
 
 	override ignoreEvent(): boolean {
-		return false;
-	}
-}
-
-// Global function to fix all table cells with our checkboxes
-function fixAllTableCells() {
-	const allTds = document.querySelectorAll("td");
-	let fixedCount = 0;
-
-	// Click handler - will be re-attached after cloning
-	// const clickHandler = (e: Event) => {
-	// 	console.log("[Decorator Widgets] Checkbox clicked!");
-	// 	e.preventDefault();
-	// 	e.stopPropagation();
-	// 	e.target;
-
-	// 	const newState = this.currentChar === " " ? "x" : " ";
-	// 	console.log("[Decorator Widgets] Updating:", this.currentChar, "->", newState);
-	// 	const transaction = this.view.state.update({
-	// 		changes: {
-	// 			from: this.pos,
-	// 			to: this.pos + 1,
-	// 			insert: newState,
-	// 		},
-	// 	});
-	// 	this.view.dispatch(transaction);
-	// };
-
-	allTds.forEach((td) => {
-		const hasOurCheckbox = td.querySelector(".decorator-widgets-checkbox");
-		if (hasOurCheckbox && !td.hasAttribute("data-decorator-fixed")) {
-			// Clone the td to remove all event listeners
-			const clone = td.cloneNode(true) as HTMLElement;
-			if (td.parentNode) {
-				td.parentNode.replaceChild(clone, td);
-			}
-
-			// Mark as fixed
-			clone.setAttribute("data-decorator-fixed", "true");
-
-			// Remove disabled from our checkbox
-			const checkbox = clone.querySelector(".decorator-widgets-checkbox") as HTMLInputElement;
-			if (checkbox) {
-				checkbox.disabled = false;
-				checkbox.removeAttribute("disabled");
-				// checkbox.addEventListener("click", clickHandler);
-				console.log("[Decorator Widgets] Fixed cell, removed disabled");
-			}
-			fixedCount++;
-		}
-	});
-
-	if (fixedCount > 0) {
-		console.log(`[Decorator Widgets] Fixed ${fixedCount} table cells`);
+		return true;
 	}
 }
 
@@ -138,7 +141,7 @@ const checkboxDecorator = new MatchDecorator({
 		}
 
 		return Decoration.replace({
-			widget: new TableCheckboxWidget(pos, match[1], view),
+			widget: new TableCheckboxWidget(match[1]),
 		});
 	},
 });
@@ -163,9 +166,6 @@ const decorationsPlugin = ViewPlugin.fromClass(
 
 			if (update.docChanged || update.viewportChanged) {
 				this.decorations = checkboxDecorator.updateDeco(update, this.decorations);
-
-				// Fix cells again after decorations update
-				requestAnimationFrame(() => fixAllTableCells());
 			}
 		}
 	},
@@ -174,8 +174,4 @@ const decorationsPlugin = ViewPlugin.fromClass(
 	},
 );
 
-const tableCheckboxExtension: Extension = [decorationsPlugin];
-
-export function registerTableCheckboxExtension(): Extension {
-	return tableCheckboxExtension;
-}
+export const tableCheckboxExtension: Extension = [decorationsPlugin];
