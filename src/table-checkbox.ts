@@ -1,5 +1,6 @@
 import { Extension } from "@codemirror/state";
-import { EditorView, Decoration, MatchDecorator, ViewPlugin, ViewUpdate, WidgetType } from "@codemirror/view";
+import { EditorView, Decoration, ViewPlugin, ViewUpdate, WidgetType } from "@codemirror/view";
+import { RangeSetBuilder } from "@codemirror/state";
 import { editorLivePreviewField } from "obsidian";
 
 class TableCheckboxWidget extends WidgetType {
@@ -37,43 +38,109 @@ class TableCheckboxWidget extends WidgetType {
 	}
 }
 
-const checkboxDecorator = new MatchDecorator({
-	// Match [ ] or [x] inside tables
-	regexp: /\[([ x])\]/g,
-	decoration: (match) => {
-		const isChecked = match[1] === "x";
-		return Decoration.replace({
-			widget: new TableCheckboxWidget(isChecked),
-		});
-	},
-});
+function isInsideTable(view: EditorView, pos: number): boolean {
+	const line = view.state.doc.lineAt(pos);
+	const lineText = view.state.doc.sliceString(line.from, line.to);
+	return lineText.includes("|");
+}
 
-function shouldDecorateTable(view: EditorView): boolean {
-	// Check if we're in Live Preview mode
-	const livePreview = view.state.field(editorLivePreviewField, false);
-	if (!livePreview) return false;
+function isInsideCodeBlock(view: EditorView, pos: number): boolean {
+	const line = view.state.doc.lineAt(pos);
+	const lineText = view.state.doc.sliceString(line.from, line.to);
 
-	// Simple check: does the viewport contain table markers (|)
+	// Skip indented code blocks
+	if (/^[ \t]{4,}/.test(lineText)) {
+		return true;
+	}
+
+	// Check for fenced code blocks by looking backwards
+	const doc = view.state.doc;
+	let currentLine = line;
+	let linesChecked = 0;
+	let insideCodeBlock = false;
+
+	while (currentLine && linesChecked < 100) {
+		const text = doc.sliceString(currentLine.from, currentLine.to).trim();
+
+		if (text.startsWith("```")) {
+			insideCodeBlock = currentLine.from < line.from;
+			break;
+		}
+
+		if (currentLine.from === 0) break;
+
+		currentLine = doc.lineAt(currentLine.from - 1);
+		linesChecked++;
+	}
+
+	return insideCodeBlock;
+}
+
+function buildDecorations(view: EditorView) {
+	const builder = new RangeSetBuilder<Decoration>();
 	const { from, to } = view.viewport;
-	const text = view.state.doc.sliceString(from, to);
-	return text.includes("|");
+	const doc = view.state.doc;
+	const checkboxRegex = /\[([ x])\]/g;
+
+	for (let pos = from; pos <= to; ) {
+		const line = doc.lineAt(pos);
+		const lineContent = doc.sliceString(line.from, line.to);
+
+		// Skip if in code block
+		if (isInsideCodeBlock(view, line.from)) {
+			pos = line.to + 1;
+			continue;
+		}
+
+		// Find checkboxes in this line
+		checkboxRegex.lastIndex = 0;
+		let match: RegExpExecArray | null;
+
+		while ((match = checkboxRegex.exec(lineContent)) !== null) {
+			const matchPos = line.from + match.index;
+			const isChecked = match[1] === "x";
+
+			// Only decorate if inside a table
+			if (matchPos >= from && matchPos <= to && isInsideTable(view, matchPos)) {
+				builder.add(
+					matchPos,
+					matchPos + 3,
+					Decoration.replace({
+						widget: new TableCheckboxWidget(isChecked),
+					})
+				);
+			}
+		}
+
+		pos = line.to + 1;
+	}
+
+	return builder.finish();
 }
 
 const tableCheckboxExtension: Extension = [
 	ViewPlugin.fromClass(
 		class {
-			decorations;
+			decorations = Decoration.none;
 
 			constructor(view: EditorView) {
-				this.decorations = checkboxDecorator.createDeco(view);
+				// Only create decorations in Live Preview mode
+				const livePreview = view.state.field(editorLivePreviewField, false);
+				if (livePreview) {
+					this.decorations = buildDecorations(view);
+				}
 			}
 
 			update(update: ViewUpdate) {
-				// Only update if we're in a table context
-				if (shouldDecorateTable(update.view)) {
-					this.decorations = checkboxDecorator.updateDeco(update, this.decorations);
-				} else {
+				const livePreview = update.view.state.field(editorLivePreviewField, false);
+				if (!livePreview) {
 					this.decorations = Decoration.none;
+					return;
+				}
+
+				// Rebuild decorations on document changes or viewport changes
+				if (update.docChanged || update.viewportChanged) {
+					this.decorations = buildDecorations(update.view);
 				}
 			}
 		},
