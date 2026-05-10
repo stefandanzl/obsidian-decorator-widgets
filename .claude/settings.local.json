@@ -1,5 +1,0 @@
-{
-	"permissions": {
-		"allow": ["PowerShell(npm list @codemirror/view @codemirror/state 2>&1)"]
-	}
-}
