@@ -1,15 +1,15 @@
 import { Extension } from "@codemirror/state";
-import { EditorView, Decoration, WidgetType } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+import { EditorView, Decoration, MatchDecorator, ViewPlugin, ViewUpdate, WidgetType } from "@codemirror/view";
 import { editorLivePreviewField } from "obsidian";
 
 class TableCheckboxWidget extends WidgetType {
-	constructor(
-		private readonly view: EditorView,
-		private readonly pos: number,
-		private readonly currentChar: string,
-	) {
+	constructor(private readonly checked: boolean) {
 		super();
+	}
+
+	// Important: for efficient widget comparison
+	eq(other: TableCheckboxWidget): boolean {
+		return other.checked === this.checked;
 	}
 
 	toDOM() {
@@ -22,27 +22,8 @@ class TableCheckboxWidget extends WidgetType {
 		const checkbox = document.createElement("input");
 		checkbox.type = "checkbox";
 		checkbox.className = "task-list-item-checkbox decorator-widgets-checkbox";
-		checkbox.setAttribute("data-task", this.currentChar);
-
-		// Set checked state based on character (only space means unchecked)
-		checkbox.checked = this.currentChar !== " ";
-
-		// Prevent focus and cursor movement
+		checkbox.checked = this.checked;
 		checkbox.tabIndex = -1;
-
-		checkbox.onmousedown = (e: MouseEvent) => {
-			e.preventDefault();
-		};
-
-		checkbox.onclick = (e: MouseEvent) => {
-			e.preventDefault();
-			e.stopPropagation();
-			e.stopImmediatePropagation();
-
-			// Toggle between [ ] and [x]
-			const newChar = checkbox.checked ? "x" : " ";
-			this.toggleCheckbox(newChar);
-		};
 
 		label.appendChild(checkbox);
 		wrapper.appendChild(label);
@@ -50,122 +31,90 @@ class TableCheckboxWidget extends WidgetType {
 		return wrapper;
 	}
 
-	private toggleCheckbox(newChar: string) {
-		const line = this.view.state.doc.lineAt(this.pos);
-		const lineContent = this.view.state.doc.sliceString(line.from, line.to);
-
-		// Find the checkbox in the line
-		const checkboxRegex = /\[[^\]|]\]/g;
-		let match: RegExpExecArray | null;
-
-		while ((match = checkboxRegex.exec(lineContent)) !== null) {
-			const absPos = line.from + match.index;
-			if (absPos === this.pos) {
-				// Don't change selection - let CM6 handle it since replacement is same length
-				this.view.dispatch({
-					changes: {
-						from: absPos,
-						to: absPos + 3,
-						insert: `[${newChar}]`,
-					},
-					userEvent: "input",
-					scrollIntoView: false,
-				});
-				break;
-			}
-		}
-	}
-
-	override ignoreEvent(): boolean {
-		return true;
+	// Prevent CM6 from handling cursor positioning
+	override ignoreEvent(event: Event): boolean {
+		return event.type === "click" || event.type === "mousedown";
 	}
 }
 
-function isInsideTable(view: EditorView, pos: number): boolean {
-	const line = view.state.doc.lineAt(pos);
-	const lineText = view.state.doc.sliceString(line.from, line.to);
+const checkboxDecorator = new MatchDecorator({
+	// Match [ ] or [x] inside tables
+	regexp: /\[([ x])\]/g,
+	decoration: (match) => {
+		const isChecked = match[1] === "x";
+		return Decoration.replace({
+			widget: new TableCheckboxWidget(isChecked),
+		});
+	},
+});
 
-	// Check if this line is part of a table by looking for pipe characters
-	return lineText.includes("|");
+function shouldDecorateTable(view: EditorView): boolean {
+	// Check if we're in Live Preview mode
+	const livePreview = view.state.field(editorLivePreviewField, false);
+	if (!livePreview) return false;
+
+	// Simple check: does the viewport contain table markers (|)
+	const { from, to } = view.viewport;
+	const text = view.state.doc.sliceString(from, to);
+	return text.includes("|");
 }
 
-function isInsideCodeBlock(view: EditorView, pos: number): boolean {
-	const line = view.state.doc.lineAt(pos);
-	const lineText = view.state.doc.sliceString(line.from, line.to);
+const tableCheckboxExtension: Extension = [
+	ViewPlugin.fromClass(
+		class {
+			decorations;
 
-	// Skip indented code blocks
-	if (/^[ \t]{4,}/.test(lineText)) {
-		return true;
-	}
-
-	// Check for fenced code blocks by looking backwards
-	const doc = view.state.doc;
-	let currentLine = line;
-	let linesChecked = 0;
-	let insideCodeBlock = false;
-
-	while (currentLine && linesChecked < 100) {
-		const text = doc.sliceString(currentLine.from, currentLine.to).trim();
-
-		if (text.startsWith("```")) {
-			// If we found the start marker before our position, we're inside
-			insideCodeBlock = currentLine.from < line.from;
-			break;
-		}
-
-		if (currentLine.from === 0) break;
-
-		currentLine = doc.lineAt(currentLine.from - 1);
-		linesChecked++;
-	}
-
-	return insideCodeBlock;
-}
-
-const tableCheckboxExtension = [
-	EditorView.decorations.of((view: EditorView) => {
-		console.log("[cm6] livePreview:", view.state.field(editorLivePreviewField, false));
-
-		const builder = new RangeSetBuilder<Decoration>();
-
-		// Only scan visible viewport for performance
-		const { from, to } = view.viewport;
-
-		const doc = view.state.doc;
-		const checkboxRegex = /\[[^\]|]\]/g;
-
-		for (let pos = from; pos <= to; ) {
-			const line = doc.lineAt(pos);
-			const lineContent = doc.sliceString(line.from, line.to);
-
-			// Skip if in code block
-			if (isInsideCodeBlock(view, line.from)) {
-				pos = line.to + 1;
-				continue;
+			constructor(view: EditorView) {
+				this.decorations = checkboxDecorator.createDeco(view);
 			}
 
-			// Find checkboxes in this line
-			checkboxRegex.lastIndex = 0;
-			let match: RegExpExecArray | null;
-
-			while ((match = checkboxRegex.exec(lineContent)) !== null) {
-				const matchPos = line.from + match.index;
-				const char = match[0][1];
-
-				// Only decorate if inside a table and within viewport
-				if (matchPos >= from && matchPos <= to && isInsideTable(view, matchPos)) {
-					const decoration = Decoration.replace({
-						widget: new TableCheckboxWidget(view, matchPos, char),
-					});
-					builder.add(matchPos, matchPos + 3, decoration);
+			update(update: ViewUpdate) {
+				// Only update if we're in a table context
+				if (shouldDecorateTable(update.view)) {
+					this.decorations = checkboxDecorator.updateDeco(update, this.decorations);
+				} else {
+					this.decorations = Decoration.none;
 				}
 			}
+		},
+		{
+			decorations: (v) => v.decorations,
+			eventHandlers: {
+				mousedown: (e, view) => {
+					const target = e.target as HTMLInputElement;
+					if (target.classList.contains("decorator-widgets-checkbox")) {
+						e.preventDefault();
+						e.stopPropagation();
+						return true;
+					}
+				},
+				click: (e, view) => {
+					const target = e.target as HTMLInputElement;
+					if (target.classList.contains("decorator-widgets-checkbox")) {
+						e.preventDefault();
+						e.stopPropagation();
 
-			pos = line.to + 1;
+						const pos = view.posAtDOM(target);
+						if (pos === null) return false;
+
+						const newChar = target.checked ? "x" : " ";
+
+						view.dispatch({
+							changes: {
+								from: pos + 1,
+								to: pos + 2,
+								insert: newChar,
+							},
+							userEvent: "input",
+							scrollIntoView: false,
+						});
+
+						return true;
+					}
+				},
+			},
 		}
-
-		return builder.finish();
-	}),
+	),
 ];
 
 export function registerTableCheckboxExtension(): Extension {
