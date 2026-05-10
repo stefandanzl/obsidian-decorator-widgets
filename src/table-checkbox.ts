@@ -36,24 +36,14 @@ class TableCheckboxWidget extends WidgetType {
 		checkbox.disabled = false;
 		checkbox.removeAttribute("disabled");
 
-		// Store widget data on the checkbox so we can re-attach handlers after cloning
-		(checkbox as any).dataset.decoratorPos = String(this.pos);
-		(checkbox as any).dataset.decoratorCurrentChar = this.currentChar;
-		(checkbox as any).dataset.decoratorViewId = "default"; // We'll need to track the view
-
-		// Store view reference globally for access in fixAllTableCells
-		if (!(window as any).decoratorViews) {
-			(window as any).decoratorViews = new Map();
-		}
-		(window as any).decoratorViews.set("default", this.view);
-
-		// Initial click handler (will be replaced after cloning)
-		checkbox.addEventListener("click", (e: Event) => {
-			console.log("[Decorator Widgets] Initial checkbox clicked!");
+		// Click handler - will be re-attached after cloning
+		const clickHandler = (e: Event) => {
+			console.log("[Decorator Widgets] Checkbox clicked!");
 			e.preventDefault();
 			e.stopPropagation();
 
 			const newState = this.currentChar === " " ? "x" : " ";
+			console.log("[Decorator Widgets] Updating:", this.currentChar, "->", newState);
 			const transaction = this.view.state.update({
 				changes: {
 					from: this.pos,
@@ -62,9 +52,19 @@ class TableCheckboxWidget extends WidgetType {
 				},
 			});
 			this.view.dispatch(transaction);
-		});
+		};
+
+		checkbox.addEventListener("click", clickHandler);
 		label.appendChild(checkbox);
 		wrapper.appendChild(label);
+
+		// Schedule fixing all table cells with our checkboxes
+		// This runs after widgets are inserted into the DOM
+		requestAnimationFrame(() => {
+			fixAllTableCells();
+		});
+		setTimeout(() => fixAllTableCells(), 50);
+		setTimeout(() => fixAllTableCells(), 100);
 
 		return wrapper;
 	}
@@ -79,20 +79,28 @@ function fixAllTableCells() {
 	const allTds = document.querySelectorAll("td");
 	let fixedCount = 0;
 
+	// Click handler - will be re-attached after cloning
+	// const clickHandler = (e: Event) => {
+	// 	console.log("[Decorator Widgets] Checkbox clicked!");
+	// 	e.preventDefault();
+	// 	e.stopPropagation();
+	// 	e.target;
+
+	// 	const newState = this.currentChar === " " ? "x" : " ";
+	// 	console.log("[Decorator Widgets] Updating:", this.currentChar, "->", newState);
+	// 	const transaction = this.view.state.update({
+	// 		changes: {
+	// 			from: this.pos,
+	// 			to: this.pos + 1,
+	// 			insert: newState,
+	// 		},
+	// 	});
+	// 	this.view.dispatch(transaction);
+	// };
+
 	allTds.forEach((td) => {
-		const originalCheckbox = td.querySelector(".decorator-widgets-checkbox") as HTMLInputElement;
-		if (originalCheckbox && !td.hasAttribute("data-decorator-fixed")) {
-			// Get the widget data from the checkbox
-			const pos = parseInt(originalCheckbox.dataset.decoratorPos || "0");
-			const currentChar = originalCheckbox.dataset.decoratorCurrentChar || " ";
-			const viewId = originalCheckbox.dataset.decoratorViewId || "default";
-			const view = (window as any).decoratorViews?.get(viewId);
-
-			if (!view) {
-				console.warn("[Decorator Widgets] No view found for checkbox!");
-				return;
-			}
-
+		const hasOurCheckbox = td.querySelector(".decorator-widgets-checkbox");
+		if (hasOurCheckbox && !td.hasAttribute("data-decorator-fixed")) {
 			// Clone the td to remove all event listeners
 			const clone = td.cloneNode(true) as HTMLElement;
 			if (td.parentNode) {
@@ -102,32 +110,13 @@ function fixAllTableCells() {
 			// Mark as fixed
 			clone.setAttribute("data-decorator-fixed", "true");
 
-			// Get the cloned checkbox and fix it
+			// Remove disabled from our checkbox
 			const checkbox = clone.querySelector(".decorator-widgets-checkbox") as HTMLInputElement;
 			if (checkbox) {
 				checkbox.disabled = false;
 				checkbox.removeAttribute("disabled");
-
-				// Re-attach click handler with the correct closure data
-				checkbox.addEventListener("click", (e: Event) => {
-					console.log("[Decorator Widgets] Cloned checkbox clicked!", { pos, currentChar });
-					e.preventDefault();
-					e.stopPropagation();
-
-					const newState = currentChar === " " ? "x" : " ";
-					console.log("[Decorator Widgets] Updating:", currentChar, "->", newState);
-
-					const transaction = view.state.update({
-						changes: {
-							from: pos,
-							to: pos + 1,
-							insert: newState,
-						},
-					});
-					view.dispatch(transaction);
-				});
-
-				console.log("[Decorator Widgets] Fixed cell, removed disabled, re-attached handler");
+				// checkbox.addEventListener("click", clickHandler);
+				console.log("[Decorator Widgets] Fixed cell, removed disabled");
 			}
 			fixedCount++;
 		}
