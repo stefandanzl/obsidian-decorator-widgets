@@ -1,25 +1,26 @@
 import type MyPlugin from "./main";
+import { MarkdownPostProcessorContext, MarkdownView } from "obsidian";
+import { EditorView } from "@codemirror/view";
 
 const CHECKBOX_RE = /\[(.)\]/g;
 const SKIP_TAGS = new Set(["CODE", "PRE", "A", "SCRIPT", "STYLE", "KBD"]);
 
 export function registerPreviewProcessor(plugin: MyPlugin): void {
-	plugin.registerMarkdownPostProcessor((element) => {
-		// Live Preview: element itself is a single table cell wrapper
+	plugin.registerMarkdownPostProcessor((element, ctx) => {
 		if (element.matches?.(".table-cell-wrapper")) {
-			transformCell(element);
+			transformCell(element, ctx, plugin);
 			return;
 		}
-
-		// Reading mode: find every cell inside any table
-		element.querySelectorAll<HTMLElement>("table td, table th").forEach(transformCell);
+		element
+			.querySelectorAll<HTMLElement>("table td, table th")
+			.forEach((cell) => transformCell(cell, ctx, plugin));
 	});
 }
 
-function transformCell(cell: HTMLElement): void {
+function transformCell(cell: HTMLElement, ctx: MarkdownPostProcessorContext, plugin: MyPlugin): void {
 	const textNodes: Text[] = [];
 	collectTextNodes(cell, textNodes);
-	textNodes.forEach(replaceCheckboxesInTextNode);
+	textNodes.forEach((tn) => replaceCheckboxesInTextNode(tn, ctx, plugin));
 }
 
 function collectTextNodes(node: Node, out: Text[]): void {
@@ -32,7 +33,11 @@ function collectTextNodes(node: Node, out: Text[]): void {
 	}
 }
 
-function replaceCheckboxesInTextNode(textNode: Text): void {
+function replaceCheckboxesInTextNode(
+	textNode: Text,
+	ctx: MarkdownPostProcessorContext,
+	plugin: MyPlugin,
+): void {
 	const text = textNode.nodeValue;
 	if (!text || !text.includes("[")) return;
 
@@ -48,7 +53,7 @@ function replaceCheckboxesInTextNode(textNode: Text): void {
 		if (m.index > lastIndex) {
 			frag.appendChild(document.createTextNode(text.slice(lastIndex, m.index)));
 		}
-		frag.appendChild(buildCheckbox(m[1]));
+		frag.appendChild(buildCheckbox(m[1], ctx, plugin));
 		lastIndex = m.index + m[0].length;
 	}
 	if (lastIndex < text.length) {
@@ -57,7 +62,7 @@ function replaceCheckboxesInTextNode(textNode: Text): void {
 	textNode.parentNode?.replaceChild(frag, textNode);
 }
 
-function buildCheckbox(char: string): HTMLElement {
+function buildCheckbox(char: string, ctx: MarkdownPostProcessorContext, plugin: MyPlugin): HTMLElement {
 	const wrapper = document.createElement("span");
 	wrapper.className = "task-list-item decorator-widgets-wrapper";
 	wrapper.dataset.task = char;
@@ -70,8 +75,59 @@ function buildCheckbox(char: string): HTMLElement {
 		type: "checkbox",
 	});
 	input.dataset.task = char;
-	input.disabled = true;
 	if (char !== " ") input.checked = true;
 
+	// Prevent CM6 cursor placement / focus shift
+	input.addEventListener("mousedown", (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+	});
+
+	input.addEventListener("click", (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+		toggleCheckbox(input, plugin);
+	});
+
 	return wrapper;
+}
+
+function toggleCheckbox(input: HTMLInputElement, plugin: MyPlugin): void {
+	const mdView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
+	if (!mdView) return;
+
+	// @ts-expect-error — `cm` is internal but stable
+	const cmView = mdView.editor?.cm as EditorView | undefined;
+	if (!cmView) return; // Reading mode falls through here — see note below
+
+	// Get an approximate source position for the clicked widget
+	const approxPos = cmView.posAtDOM(input);
+	const doc = cmView.state.doc;
+	const line = doc.lineAt(approxPos);
+	const lineText = doc.sliceString(line.from, line.to);
+
+	// Snap to the nearest [.] on this line
+	let bestPos = -1;
+	let bestChar = "";
+	let bestDiff = Infinity;
+	const re = /\[(.)\]/g;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(lineText)) !== null) {
+		const absPos = line.from + m.index;
+		const diff = Math.abs(absPos - approxPos);
+		if (diff < bestDiff) {
+			bestDiff = diff;
+			bestPos = absPos;
+			bestChar = m[1];
+		}
+	}
+	if (bestPos < 0) return;
+
+	const newChar = bestChar === " " ? "x" : " ";
+
+	cmView.dispatch({
+		changes: { from: bestPos, to: bestPos + 3, insert: `[${newChar}]` },
+		userEvent: "input",
+		scrollIntoView: false,
+	});
 }

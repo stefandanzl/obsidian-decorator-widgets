@@ -77,7 +77,7 @@ class TableCheckboxWidget extends WidgetType {
 	}
 
 	override ignoreEvent(): boolean {
-		return false;
+		return true;
 	}
 }
 
