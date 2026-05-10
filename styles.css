@@ -41,3 +41,18 @@ If your plugin does not need CSS, delete this file.
 .cm-line .decorator-widgets-label + .cm-widgetBuffer {
 	/* This helps with cursor positioning after the widget */
 }
+
+/* Table cells with our checkboxes - disable Obsidian's table editing */
+.decorator-widgets-has-checkbox {
+	pointer-events: none !important;
+}
+
+/* Re-enable clicks for the cell wrapper so checkbox works */
+.decorator-widgets-has-checkbox .table-cell-wrapper {
+	pointer-events: auto !important;
+}
+
+/* Ensure our checkbox is clickable */
+.decorator-widgets-has-checkbox .decorator-widgets-checkbox {
+	pointer-events: auto !important;
+}
