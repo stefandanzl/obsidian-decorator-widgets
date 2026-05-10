@@ -6,3 +6,38 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+
+/* Decorator Widgets - Table Checkboxes */
+
+/* Base class for our decorator widgets */
+.decorator-widgets-label {
+	/* Inherit Obsidian's task list label styles */
+	display: inline-flex;
+	align-items: center;
+}
+
+.decorator-widgets-checkbox {
+	/* Inherit Obsidian's checkbox styles */
+	top: -0.1em;
+	vertical-align: middle;
+}
+
+/* Ensure checkbox is centered in table cells */
+.markdown-source-view.mod-cm6 .decorator-widgets-label {
+	/* Additional centering for table cells */
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+/* Table-specific checkbox positioning */
+.markdown-source-view.mod-cm6 table .decorator-widgets-checkbox {
+	/* Ensure checkbox doesn't break table layout */
+	margin: 0;
+	vertical-align: middle;
+}
+
+/* Hide the raw Markdown syntax when widget is active */
+.cm-line .decorator-widgets-label + .cm-widgetBuffer {
+	/* This helps with cursor positioning after the widget */
+}
