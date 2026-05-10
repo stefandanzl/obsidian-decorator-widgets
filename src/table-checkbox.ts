@@ -1,12 +1,13 @@
 import { Extension } from "@codemirror/state";
 import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
+import { editorLivePreviewField } from "obsidian";
 
 class TableCheckboxWidget extends WidgetType {
 	constructor(
 		private readonly view: EditorView,
 		private readonly pos: number,
-		private readonly currentChar: string
+		private readonly currentChar: string,
 	) {
 		super();
 	}
@@ -65,10 +66,10 @@ class TableCheckboxWidget extends WidgetType {
 					changes: {
 						from: absPos,
 						to: absPos + 3,
-						insert: `[${newChar}]`
+						insert: `[${newChar}]`,
 					},
 					userEvent: "input",
-					scrollIntoView: false
+					scrollIntoView: false,
 				});
 				break;
 			}
@@ -123,6 +124,8 @@ function isInsideCodeBlock(view: EditorView, pos: number): boolean {
 
 const tableCheckboxExtension = [
 	EditorView.decorations.of((view: EditorView) => {
+		console.log("[cm6] livePreview:", view.state.field(editorLivePreviewField, false));
+
 		const builder = new RangeSetBuilder<Decoration>();
 
 		// Only scan visible viewport for performance
@@ -152,7 +155,7 @@ const tableCheckboxExtension = [
 				// Only decorate if inside a table and within viewport
 				if (matchPos >= from && matchPos <= to && isInsideTable(view, matchPos)) {
 					const decoration = Decoration.replace({
-						widget: new TableCheckboxWidget(view, matchPos, char)
+						widget: new TableCheckboxWidget(view, matchPos, char),
 					});
 					builder.add(matchPos, matchPos + 3, decoration);
 				}
@@ -162,7 +165,7 @@ const tableCheckboxExtension = [
 		}
 
 		return builder.finish();
-	})
+	}),
 ];
 
 export function registerTableCheckboxExtension(): Extension {
