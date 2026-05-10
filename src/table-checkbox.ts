@@ -2,10 +2,6 @@ import { Extension, Prec } from "@codemirror/state";
 import { EditorView, Decoration, MatchDecorator, ViewPlugin, ViewUpdate, WidgetType } from "@codemirror/view";
 import { editorLivePreviewField } from "obsidian";
 
-// Try to import syntaxTree - it might be available through the bundle
-// @ts-ignore - Obsidian bundles this but doesn't export it
-import { syntaxTree } from "@codemirror/language";
-
 class TableCheckboxWidget extends WidgetType {
 	constructor(private readonly checked: boolean) {
 		super();
@@ -35,55 +31,30 @@ class TableCheckboxWidget extends WidgetType {
 	}
 
 	override ignoreEvent(event: Event): boolean {
-		return event.type === "click" || event.type === "mousedown";
+		console.log("[Decorator Widgets] Widget ignoreEvent:", event.type);
+		return true; // Ignore ALL events from the widget
 	}
 }
 
 const checkboxDecorator = new MatchDecorator({
 	regexp: /\[([ x])\]/g,
 	decoration: (match, view, pos) => {
-		// Use syntax tree to check if we're inside a table
-		let isInsideTable = false;
+		// Check if this position is inside a table by examining the line
+		const line = view.state.doc.lineAt(pos);
+		const lineText = view.state.doc.sliceString(line.from, line.to);
 
-		try {
-			const tree = syntaxTree(view.state);
-			const node = tree.resolveInner(pos, 1);
-
-			// Walk up the tree to check if we're in a table
-			let curr: typeof node | null = node;
-			while (curr) {
-				// Check for table-related node names
-				if (
-					curr.name.includes("table") ||
-					curr.name.includes("Table") ||
-					curr.name === "TableHeader" ||
-					curr.name === "TableRow" ||
-					curr.name === "TableCell"
-				) {
-					isInsideTable = true;
-					break;
-				}
-				// Skip if in code block
-				if (
-					curr.name === "FencedCode" ||
-					curr.name === "CodeBlock" ||
-					curr.name === "InlineCode"
-				) {
-					return null;
-				}
-				curr = curr.parent;
-			}
-		} catch (e) {
-			// Fallback to line-based detection if syntaxTree fails
-			const line = view.state.doc.lineAt(pos);
-			const lineText = view.state.doc.sliceString(line.from, line.to);
-			if (!lineText.includes("|")) return null;
+		// Only render if the line contains a pipe character (table indicator)
+		if (!lineText.includes("|")) {
+			return null;
 		}
 
-		// Only render if inside a table
-		if (!isInsideTable) return null;
+		// Skip if in code block (simple check)
+		if (/^[ \t]{4,}/.test(lineText)) {
+			return null;
+		}
 
 		const isChecked = match[1] === "x";
+		console.log("[Decorator Widgets] Creating decoration for checkbox in table");
 		return Decoration.replace({
 			widget: new TableCheckboxWidget(isChecked),
 		});
@@ -96,9 +67,14 @@ const tableCheckboxExtension: Extension = [
 			decorations = Decoration.none;
 
 			constructor(view: EditorView) {
+				console.log("[Decorator Widgets] CM6 ViewPlugin constructor");
 				const livePreview = view.state.field(editorLivePreviewField, false);
+				console.log("[Decorator Widgets] Live Preview enabled:", livePreview);
 				if (livePreview) {
 					this.decorations = checkboxDecorator.createDeco(view);
+					console.log("[Decorator Widgets] Decorations created, count:", this.decorations.size);
+				} else {
+					console.log("[Decorator Widgets] Not in Live Preview, skipping CM6 decorations");
 				}
 			}
 
@@ -109,30 +85,46 @@ const tableCheckboxExtension: Extension = [
 					return;
 				}
 
-				this.decorations = checkboxDecorator.updateDeco(update, this.decorations);
+				if (update.docChanged || update.viewportChanged) {
+					this.decorations = checkboxDecorator.updateDeco(update, this.decorations);
+					console.log("[Decorator Widgets] Decorations updated, count:", this.decorations.size);
+				}
 			}
 		},
 		{
 			decorations: (v) => v.decorations,
 			eventHandlers: {
 				mousedown: (e, view) => {
+					console.log("[Decorator Widgets] mousedown event on:", (e.target as HTMLElement).className);
 					const target = e.target as HTMLInputElement;
 					if (target.classList.contains("decorator-widgets-checkbox")) {
+						console.log("[Decorator Widgets] Preventing mousedown on checkbox");
 						e.preventDefault();
 						e.stopPropagation();
 						return true;
 					}
 				},
 				click: (e, view) => {
+					console.log("[Decorator Widgets] click event on:", (e.target as HTMLElement).className);
 					const target = e.target as HTMLInputElement;
 					if (target.classList.contains("decorator-widgets-checkbox")) {
+						console.log("[Decorator Widgets] Clicking checkbox, checked before:", target.checked);
 						e.preventDefault();
 						e.stopPropagation();
 
+						// Toggle the checkbox state manually since we prevented default
+						target.checked = !target.checked;
+						console.log("[Decorator Widgets] Checkbox checked after:", target.checked);
+
 						const pos = view.posAtDOM(target);
-						if (pos === null) return false;
+						console.log("[Decorator Widgets] CM6 pos:", pos);
+						if (pos === null) {
+							console.log("[Decorator Widgets] Could not get position");
+							return false;
+						}
 
 						const newChar = target.checked ? "x" : " ";
+						console.log("[Decorator Widgets] CM6 dispatching:", newChar);
 
 						view.dispatch({
 							changes: {
@@ -140,7 +132,7 @@ const tableCheckboxExtension: Extension = [
 								to: pos + 2,
 								insert: newChar,
 							},
-							userEvent: "input",
+							userEvent: "input.select", // Use select event to avoid cursor movement
 							scrollIntoView: false,
 						});
 
@@ -148,7 +140,7 @@ const tableCheckboxExtension: Extension = [
 					}
 				},
 			},
-		}
+		},
 	),
 ];
 

@@ -1,12 +1,13 @@
 import type MyPlugin from "./main";
-import { MarkdownPostProcessorContext, MarkdownView } from "obsidian";
-import { EditorView } from "@codemirror/view";
+import { MarkdownPostProcessorContext } from "obsidian";
 
 const CHECKBOX_RE = /\[(.)\]/g;
 const SKIP_TAGS = new Set(["CODE", "PRE", "A", "SCRIPT", "STYLE", "KBD"]);
 
 export function registerPreviewProcessor(plugin: MyPlugin): void {
 	plugin.registerMarkdownPostProcessor((element, ctx) => {
+		console.log("[Decorator Widgets] Preview processor called");
+
 		if (element.matches?.(".table-cell-wrapper")) {
 			transformCell(element, ctx, plugin);
 			return;
@@ -77,57 +78,10 @@ function buildCheckbox(char: string, ctx: MarkdownPostProcessorContext, plugin: 
 	input.dataset.task = char;
 	if (char !== " ") input.checked = true;
 
-	// Prevent CM6 cursor placement / focus shift
-	input.addEventListener("mousedown", (e) => {
-		e.preventDefault();
-		e.stopPropagation();
-	});
+	// Always disabled in preview mode (read-only)
+	input.disabled = true;
 
-	input.addEventListener("click", (e) => {
-		e.preventDefault();
-		e.stopPropagation();
-		toggleCheckbox(input, plugin);
-	});
+	console.log("[Decorator Widgets] Created read-only checkbox for preview");
 
 	return wrapper;
-}
-
-function toggleCheckbox(input: HTMLInputElement, plugin: MyPlugin): void {
-	const mdView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
-	if (!mdView) return;
-
-	// @ts-expect-error — `cm` is internal but stable
-	const cmView = mdView.editor?.cm as EditorView | undefined;
-	if (!cmView) return; // Reading mode falls through here — see note below
-
-	// Get an approximate source position for the clicked widget
-	const approxPos = cmView.posAtDOM(input);
-	const doc = cmView.state.doc;
-	const line = doc.lineAt(approxPos);
-	const lineText = doc.sliceString(line.from, line.to);
-
-	// Snap to the nearest [.] on this line
-	let bestPos = -1;
-	let bestChar = "";
-	let bestDiff = Infinity;
-	const re = /\[(.)\]/g;
-	let m: RegExpExecArray | null;
-	while ((m = re.exec(lineText)) !== null) {
-		const absPos = line.from + m.index;
-		const diff = Math.abs(absPos - approxPos);
-		if (diff < bestDiff) {
-			bestDiff = diff;
-			bestPos = absPos;
-			bestChar = m[1];
-		}
-	}
-	if (bestPos < 0) return;
-
-	const newChar = bestChar === " " ? "x" : " ";
-
-	cmView.dispatch({
-		changes: { from: bestPos, to: bestPos + 3, insert: `[${newChar}]` },
-		userEvent: "input",
-		scrollIntoView: false,
-	});
 }
